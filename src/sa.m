@@ -1,7 +1,6 @@
 #include "sa.h"
 
 extern int csr_get_active_config(uint32_t *config);
-#define CSR_ALLOW_UNRESTRICTED_FS 0x02
 #define CSR_ALLOW_TASK_FOR_PID    0x04
 
 extern char g_sa_socket_file[MAXLEN];
@@ -303,32 +302,12 @@ static bool scripting_addition_is_sip_friendly(void)
     uint32_t config = 0;
     csr_get_active_config(&config);
 
-    if (!(config & CSR_ALLOW_UNRESTRICTED_FS)) {
-        return false;
-    }
-
     if (!(config & CSR_ALLOW_TASK_FOR_PID)) {
         return false;
     }
 
     return true;
 }
-
-#ifdef __arm64__
-static bool scripting_addition_is_arm64e_enabled(void)
-{
-    char bootargs[2048];
-    size_t len = sizeof(bootargs) - 1;
-
-    if (sysctlbyname("kern.bootargs", bootargs, &len, NULL, 0) == 0) {
-        if (strnstr(bootargs, "-arm64e_preview_abi", len)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-#endif
 
 static bool mach_loader_inject_payload(void)
 {
@@ -350,8 +329,8 @@ static bool mach_loader_inject_payload(void)
 int scripting_addition_uninstall(void)
 {
     if (!scripting_addition_is_sip_friendly()) {
-        warn("yabai: System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!\n");
-        notify("scripting-addition", "System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!");
+        warn("yabai: System Integrity Protection: Debugging Restrictions must be disabled!\n");
+        notify("scripting-addition", "System Integrity Protection: Debugging Restrictions must be disabled!");
         return 1;
     }
 
@@ -379,8 +358,8 @@ int scripting_addition_load(void)
     }
 
     if (!scripting_addition_is_sip_friendly()) {
-        warn("yabai: System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!\n");
-        notify("scripting-addition", "System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!");
+        warn("yabai: System Integrity Protection: Debugging Restrictions must be disabled!\n");
+        notify("scripting-addition", "System Integrity Protection: Debugging Restrictions must be disabled!");
         result = 1;
         goto out;
     }
@@ -389,15 +368,6 @@ int scripting_addition_load(void)
         result = scripting_addition_install();
         goto out;
     }
-
-#ifdef __arm64__
-    if (!scripting_addition_is_arm64e_enabled()) {
-        warn("yabai: missing required nvram boot-arg '-arm64e_preview_abi'!\n");
-        notify("scripting-addition", "missing required nvram boot-arg '-arm64e_preview_abi'!");
-        result = 1;
-        goto out;
-    }
-#endif
 
     if (!mach_loader_inject_payload()) {
         warn("yabai: scripting-addition failed to inject payload into Dock.app!\n");
