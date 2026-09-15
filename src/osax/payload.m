@@ -233,11 +233,11 @@ static bool verify_os_version(NSOperatingSystemVersion os_version)
     } else if (os_version.majorVersion == 15) {
         macOSSequoia = true;
         return true; // Sequoia 15.0
-    } else if (os_version.majorVersion == 26) {
+    } else if (os_version.majorVersion == 26 || os_version.majorVersion == 27) {
 
-        NSLog(@"[yabai-sa] Detected Tahoe Preview... flagging 'macOSSequoia=true.'");
+        NSLog(@"[yabai-sa] Detected Tahoe/27... flagging 'macOSSequoia=true.'");
         macOSSequoia = true;
-        return true; // Tahoe preview
+        return true;
     }
 
     NSLog(@"[yabai-sa] spaces functionality is only supported on macOS Big Sur 11.0.0+, Monterey 12.0.0+, Ventura 13.0.0+, Sonoma 14.0.0+, and Sequoia 15.0");
@@ -251,11 +251,11 @@ static bool verify_os_version(NSOperatingSystemVersion os_version)
     } else if (os_version.majorVersion == 15) {
         macOSSequoia = true;
         return true; // Sequoia 15.0
-    } else if (os_version.majorVersion == 26) {
+    } else if (os_version.majorVersion == 26 || os_version.majorVersion == 27) {
 
-        NSLog(@"[yabai-sa] Detected Tahoe Preview... flagging 'macOSSequoia=true.'");
+        NSLog(@"[yabai-sa] Detected Tahoe/27... flagging 'macOSSequoia=true.'");
         macOSSequoia = true;
-        return true; // Tahoe preview
+        return true;
     }
 
     NSLog(@"[yabai-sa] spaces functionality is only supported on macOS Monterey 12.0.0+, and Ventura 13.0.0+, Sonoma 14.0.0+, and Sequoia 15.0");

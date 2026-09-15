@@ -332,6 +332,7 @@ static uint64_t dock_base(void)
 
 static bool verify_os(struct osver v)
 {
+    if (v.major == 27) { S.sequoia = true; S.tahoe = true; return true; }
     if (v.major == 26) { S.sequoia = true; S.tahoe = true; return true; }
     if (v.major == 15) { S.sequoia = true; return true; }
     if (v.major == 14) return true;
@@ -348,6 +349,7 @@ struct vpat {
 
 static struct vpat pat_dock_spaces(struct osver v)
 {
+    if (v.major == 27)  return (struct vpat){0x30000,  "?8 ?? ?? ?? 08 ?? ?? 91 00 01 40 F9 E2 03 13 AA ?? ?? ?? 94 ?? ?? ?? ?? 08"};
     if (v.major == 26)  return (struct vpat){0x30000,  "?8 ?? ?? ?? 08 ?? ?? 91 00 01 40 F9 E2 03 13 AA ?? ?? ?? 94 ?? ?? ?? ?? 08"};
     if (v.major == 15)  return (struct vpat){v.minor >= 4 ? 0x1f0000 : 0x200000, "BF 6B 0A A9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){0x114000, "BF 6B 0A A9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
@@ -358,6 +360,7 @@ static struct vpat pat_dock_spaces(struct osver v)
 
 static struct vpat pat_dppm(struct osver v)
 {
+    if (v.major == 27)  return (struct vpat){0x50000,  "?? ?? 00 ?? 08 ?? ?? 91 00 01 40 F9 E2 03 16 AA E3 03 19 AA ?? ?? ?? 94"};
     if (v.major == 26)  return (struct vpat){0x70000,  "?? ?? 00 ?? 08 ?? ?? 91 00 01 40 F9 E2 03 16 AA E3 03 19 AA ?? ?? ?? 94"};
     if (v.major == 15)  return (struct vpat){0x250000, "B1 8C 0E 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){v.minor > 0 ? 0x1d2000 : 0x9000, "B1 8C 0E 94 ?? ?? ?? 94 ?? ?? ?? 94"};
@@ -368,6 +371,7 @@ static struct vpat pat_dppm(struct osver v)
 
 static struct vpat pat_add_space(struct osver v)
 {
+    if (v.major == 27)  return (struct vpat){0x220000, "7F 23 03 D5 E1 03 1E AA ?? ?? ?? 97 FE 03 01 AA FD 7B 05 A9 FD 43 01 91 F3 03"};
     if (v.major == 26)  return (struct vpat){0x250000, "7F 23 03 D5 E1 03 1E AA ?? ?? ?? 97 FE 03 01 AA FD 7B 05 A9 FD 43 01 91 F3 03"};
     if (v.major == 15)  return (struct vpat){0x250000, "C8 6C 0A 94 ?? ?? ?? 94 C9 8C 0A 94"};
     if (v.major == 14)  return (struct vpat){0x1D0000, "C8 6C 0A 94 ?? ?? ?? 94 C9 8C 0A 94"};
@@ -378,6 +382,7 @@ static struct vpat pat_add_space(struct osver v)
 
 static struct vpat pat_remove_space(struct osver v)
 {
+    if (v.major == 27)  return (struct vpat){0x180000, "7F 23 03 D5 FF ?? ?? D1 FC ?? ?? A9 FA ?? ?? A9 F8 ?? ?? A9 F6 ?? ?? A9 F4 ?? ?? A9 FD ?? ?? A9 FD ?? ?? 91 ?? 03 03 AA F5 03 02 AA F4 03 01 AA"};
     if (v.major == 26)  return (struct vpat){0x1e0000, "7F 23 03 D5 FF ?? ?? D1 FC ?? ?? A9 FA ?? ?? A9 F8 ?? ?? A9 F6 ?? ?? A9 F4 ?? ?? A9 FD ?? ?? A9 FD ?? ?? 91 ?? 03 03 AA F5 03 02 AA F4 03 01 AA"};
     if (v.major == 15)  return (struct vpat){0x1c0000, "CA 8C 0A 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){0x280000, "CA 8C 0A 94 ?? ?? ?? 94 ?? ?? ?? 94"};
@@ -388,6 +393,7 @@ static struct vpat pat_remove_space(struct osver v)
 
 static struct vpat pat_move_space(struct osver v)
 {
+    if (v.major == 27)  return (struct vpat){0x180000, "7F 23 03 D5 E3 03 1E AA ?? ?? ?? 97 FE 03 03 AA FD 7B ?? A9 FD ?? ?? 91 F6 03 14 AA"};
     if (v.major == 26)  return (struct vpat){0x1c0000, "7F 23 03 D5 E3 03 1E AA ?? ?? ?? 97 FE 03 03 AA FD 7B ?? A9 FD ?? ?? 91 F6 03 14 AA"};
     if (v.major == 15)  return (struct vpat){0x210000, "C7 6C 0A 94 C8 6C 0A 94"};
     if (v.major == 14)  return (struct vpat){0x1C0000, "C7 6C 0A 94 C8 6C 0A 94"};
@@ -398,8 +404,9 @@ static struct vpat pat_move_space(struct osver v)
 
 static struct vpat pat_set_front_window(struct osver v)
 {
-    /* macOS 26 uses WindowManagerLayoutControl instead; this old signature
+    /* macOS 26/27 use WindowManagerLayoutControl instead; this old signature
      * resolves to a ShowFront transition helper and cannot focus by itself. */
+    if (v.major == 27)  return (struct vpat){0, NULL};
     if (v.major == 26)  return (struct vpat){0, NULL};
     if (v.major == 15)  return (struct vpat){0x200000, "1F 29 00 F9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){0x1E0000, "1F 29 00 F9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
@@ -410,6 +417,7 @@ static struct vpat pat_set_front_window(struct osver v)
 
 static struct vpat pat_fix_animation(struct osver v)
 {
+    if (v.major == 27)  return (struct vpat){0x220000, "00 10 6A 1E A8 ?? ?? D1 ?? 01 ?? F8"};
     if (v.major == 26)  return (struct vpat){0x250000, "00 10 6A 1E A8 ?? ?? D1 ?? 01 ?? F8"};
     if (v.major == 15)  return (struct vpat){0x250000, "E4 71 0A 94 E2 03 1F AA ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){0x1D0000, "E4 71 0A 94 E2 03 1F AA ?? ?? ?? 94"};
