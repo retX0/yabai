@@ -2,13 +2,25 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pwd.h>
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/file.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <sys/un.h>
 #include <unistd.h>
+
+#include "common.h"
 
 #ifdef __arm64__
 #include <ptrauth.h>
-#include <stdlib.h>
 #include <mach-o/loader.h>
 #include <mach-o/nlist.h>
 #include "dock_hijack.h"
@@ -169,19 +181,12 @@ static int map_blob_image(mach_port_t task,
     return 0;
 }
 
-static int inject_via_hijack(pid_t pid, mach_port_t task)
+static int inject_via_hijack(pid_t pid, mach_port_t task, const char *socket_path)
 {
-    const char *user = getenv("SUDO_USER");
-    if (!user) user = getenv("USER");
-    if (!user) {
-        fprintf(stderr, "no SUDO_USER/USER for sa socket\n");
-        return 1;
-    }
-
     struct sa_dp dp = {0};
     dp.magic = SA_DP_MAGIC;
     dp.dlsym = (uint64_t)ptrauth_strip(dlsym(RTLD_DEFAULT, "dlsym"), ptrauth_key_function_pointer);
-    snprintf(dp.socket_path, sizeof(dp.socket_path), "/tmp/yabai-sa_%s.socket", user);
+    snprintf(dp.socket_path, sizeof(dp.socket_path), "%s", socket_path);
 
     mach_vm_address_t data = 0, stack = 0;
     vm_size_t stack_size = 64 * 1024;
@@ -224,8 +229,103 @@ static int inject_via_hijack(pid_t pid, mach_port_t task)
 }
 #endif
 
+enum handshake_status {
+    HANDSHAKE_UNAVAILABLE,
+    HANDSHAKE_VALID,
+    HANDSHAKE_INCOMPATIBLE,
+};
+
+static bool get_sa_socket_path(char *path, size_t size)
+{
+    uid_t uid = getuid();
+
+    // sudo makes the real uid root and preserves the caller in SUDO_UID.
+    // Direct execution of this setuid loader keeps the caller as the real uid.
+    if (uid == 0) {
+        const char *sudo_uid = getenv("SUDO_UID");
+        if (sudo_uid) {
+            char *end = NULL;
+            errno = 0;
+            unsigned long value = strtoul(sudo_uid, &end, 10);
+            if (errno == 0 && end != sudo_uid && *end == '\0' && value <= UINT32_MAX) {
+                uid = (uid_t)value;
+            }
+        }
+    }
+
+    struct passwd *pw = getpwuid(uid);
+    if (!pw || !pw->pw_name) return false;
+
+    int length = snprintf(path, size, SA_SOCKET_PATH_FMT, pw->pw_name);
+    return length > 0 && (size_t)length < size;
+}
+
+static enum handshake_status check_payload(const char *socket_path)
+{
+    int sockfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (sockfd == -1) return HANDSHAKE_UNAVAILABLE;
+
+    struct timeval timeout = { .tv_sec = 1 };
+    setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+
+    struct sockaddr_un address = { .sun_family = AF_UNIX };
+    int path_length = snprintf(address.sun_path, sizeof(address.sun_path), "%s", socket_path);
+    if (path_length <= 0 || (size_t)path_length >= sizeof(address.sun_path) ||
+        connect(sockfd, (struct sockaddr *)&address, SUN_LEN(&address)) == -1) {
+        close(sockfd);
+        return HANDSHAKE_UNAVAILABLE;
+    }
+
+    unsigned char request[] = { 0x01, 0x00, SA_OPCODE_HANDSHAKE };
+    char response[SA_SOCKET_BUFF_LEN] = {0};
+    ssize_t sent = send(sockfd, request, sizeof(request), 0);
+    ssize_t received = sent == sizeof(request) ? recv(sockfd, response, sizeof(response), 0) : -1;
+    close(sockfd);
+
+    if (received <= 0) return HANDSHAKE_INCOMPATIBLE;
+
+    char *version_end = memchr(response, '\0', (size_t)received);
+    if (!version_end || version_end + 1 + sizeof(uint32_t) > response + received) {
+        return HANDSHAKE_INCOMPATIBLE;
+    }
+
+    uint32_t attributes = 0;
+    memcpy(&attributes, version_end + 1, sizeof(attributes));
+    if (strcmp(response, OSAX_VERSION) != 0 ||
+        (attributes & OSAX_ATTRIB_ALL) != OSAX_ATTRIB_ALL) {
+        return HANDSHAKE_INCOMPATIBLE;
+    }
+
+    return HANDSHAKE_VALID;
+}
+
 int main(void)
 {
+    if (geteuid() != 0) {
+        fprintf(stderr, "loader must be owned by root and installed setuid\n");
+        return 1;
+    }
+
+    int lockfd = open("/var/run/yabai-sa-loader.lock", O_CREAT | O_CLOEXEC | O_RDWR, 0600);
+    if (lockfd == -1 || flock(lockfd, LOCK_EX) == -1) {
+        fprintf(stderr, "could not acquire loader lock\n");
+        return 1;
+    }
+
+    char socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    if (!get_sa_socket_path(socket_path, sizeof(socket_path))) {
+        fprintf(stderr, "could not resolve scripting-addition socket path\n");
+        return 1;
+    }
+
+    enum handshake_status handshake = check_payload(socket_path);
+    if (handshake == HANDSHAKE_VALID) return 0;
+    if (handshake == HANDSHAKE_INCOMPATIBLE) {
+        fprintf(stderr, "an incompatible scripting-addition is already loaded\n");
+        return 1;
+    }
+
     mach_port_t task = 0;
     pid_t pid = get_dock_pid();
 
@@ -240,7 +340,7 @@ int main(void)
     }
 
 #ifdef __arm64__
-    return inject_via_hijack(pid, task);
+    int result = inject_via_hijack(pid, task, socket_path);
 #else
     int result = 0;
     thread_act_t thread = 0;
@@ -323,6 +423,16 @@ terminate:
         fprintf(stderr, "failed to terminate remote thread: %s\n", mach_error_string(error));
     }
 
-    return result;
 #endif
+
+    if (result != 0) return result;
+
+    for (int attempt = 0; attempt < 50; ++attempt) {
+        handshake = check_payload(socket_path);
+        if (handshake == HANDSHAKE_VALID) return 0;
+        usleep(100000);
+    }
+
+    fprintf(stderr, "scripting-addition handshake failed after injection\n");
+    return 1;
 }
