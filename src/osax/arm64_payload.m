@@ -5,10 +5,8 @@
     __asm__("mov x0, %0\n""mov x1, %1\n""mov x2, %2\n""mov x20, %3\n" : :"r"(v0), "r"(v1), "r"(v2), "r"(v3) :"x0", "x1", "x2", "x20"); ((void (*)())(func))();
 
 uint64_t get_dock_spaces_offset(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27) {
-        return 0x30000;
-    } else if (os_version.majorVersion == 26) {
-        return 0x30000;
+    if (os_version.majorVersion >= 26) {
+        return 0;
     } else if (os_version.majorVersion == 15) {
         return os_version.minorVersion >= 4 ? 0x1f0000 : 0x200000;
     } else if (os_version.majorVersion == 14) {
@@ -23,10 +21,8 @@ uint64_t get_dock_spaces_offset(NSOperatingSystemVersion os_version) {
 }
 
 uint64_t get_dppm_offset(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27) {
-        return 0x50000;
-    } else if (os_version.majorVersion == 26) {
-        return 0x70000;
+    if (os_version.majorVersion >= 26) {
+        return 0;
     } else if (os_version.majorVersion == 15) {
         return 0x250000;
     } else if (os_version.majorVersion == 14) {
@@ -41,10 +37,8 @@ uint64_t get_dppm_offset(NSOperatingSystemVersion os_version) {
 }
 
 uint64_t get_fix_animation_offset(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27) {
-        return 0x220000;
-    } else if (os_version.majorVersion == 26) {
-        return 0x250000;
+    if (os_version.majorVersion >= 26) {
+        return 0;
     } else if (os_version.majorVersion == 15) {
         return 0x250000;
     } else if (os_version.majorVersion == 14) {
@@ -59,10 +53,8 @@ uint64_t get_fix_animation_offset(NSOperatingSystemVersion os_version) {
 }
 
 uint64_t get_add_space_offset(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27) {
-        return 0x220000;
-    } else if (os_version.majorVersion == 26) {
-        return 0x250000;
+    if (os_version.majorVersion >= 26) {
+        return 0;
     } else if (os_version.majorVersion == 15) {
         return 0x250000;
     } else if (os_version.majorVersion == 14) {
@@ -77,10 +69,8 @@ uint64_t get_add_space_offset(NSOperatingSystemVersion os_version) {
 }
 
 uint64_t get_remove_space_offset(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27) {
-        return 0x180000;
-    } else if (os_version.majorVersion == 26) {
-        return 0x1e0000;
+    if (os_version.majorVersion >= 26) {
+        return 0;
     } else if (os_version.majorVersion == 15) {
         return 0x1c0000;
     } else if (os_version.majorVersion == 14) {
@@ -95,10 +85,8 @@ uint64_t get_remove_space_offset(NSOperatingSystemVersion os_version) {
 }
 
 uint64_t get_move_space_offset(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27) {
-        return 0x180000;
-    } else if (os_version.majorVersion == 26) {
-        return 0x1c0000;
+    if (os_version.majorVersion >= 26) {
+        return 0;
     } else if (os_version.majorVersion == 15) {
         return 0x1c0000;
     } else if (os_version.majorVersion == 14) {
@@ -113,10 +101,8 @@ uint64_t get_move_space_offset(NSOperatingSystemVersion os_version) {
 }
 
 uint64_t get_set_front_window_offset(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27) {
-        return 0x10000;
-    } else if (os_version.majorVersion == 26) {
-        return 0x10000;
+    if (os_version.majorVersion >= 26) {
+        return 0;
     } else if (os_version.majorVersion == 15) {
         return 0x35000;
     } else if (os_version.majorVersion == 14) {
@@ -131,7 +117,7 @@ uint64_t get_set_front_window_offset(NSOperatingSystemVersion os_version) {
 }
 
 const char *get_dock_spaces_pattern(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27 || os_version.majorVersion == 26) {
+    if (os_version.majorVersion >= 26) {
         // Pulling out of doBindingCommand:display (search decompiled text in ghidra) function.
         return "?8 ?? ?? ?? 08 ?? ?? 91 00 01 40 F9 E2 03 13 AA ?? ?? ?? 94 ?? ?? ?? ?? 08";
     } else if (os_version.majorVersion == 15) {
@@ -151,7 +137,7 @@ const char *get_dock_spaces_pattern(NSOperatingSystemVersion os_version) {
 }
 
 const char *get_dppm_pattern(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27 || os_version.majorVersion == 26) {
+    if (os_version.majorVersion >= 26) {
         //Pulling from function 'DPRemoteConnection::_handleEvent:'
         return "?? ?? 00 ?? 08 ?? ?? 91 00 01 40 F9 E2 03 16 AA E3 03 19 AA ?? ?? ?? 94";
     } else if (os_version.majorVersion == 15) {
@@ -171,7 +157,7 @@ const char *get_dppm_pattern(NSOperatingSystemVersion os_version) {
 }
 
 const char *get_fix_animation_pattern(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27 || os_version.majorVersion == 26) {
+    if (os_version.majorVersion >= 26) {
         return "00 10 6A 1E A8 ?? ?? D1 ?? 01 ?? F8";
     } else if (os_version.majorVersion == 15) {
         return "00 10 6A 1E A8 ?? ?? D1 ?? 01 ?? F8";
@@ -187,7 +173,7 @@ const char *get_fix_animation_pattern(NSOperatingSystemVersion os_version) {
 }
 
 const char *get_add_space_pattern(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27 || (os_version.majorVersion == 26 && os_version.minorVersion >= 4)) {
+    if (os_version.majorVersion > 26 || (os_version.majorVersion == 26 && os_version.minorVersion >= 4)) {
         return "7F 23 03 D5 E1 03 1E AA ?? ?? ?? 97 FE 03 01 AA FD 7B 05 A9 FD 43 01 91 F3 03 14 AA F5 03";
     } else if (os_version.majorVersion == 26) {
         return "7F 23 03 D5 FF C3 01 D1 E1 03 1E AA ?? ?? 00 94 FE 03 01 AA FD 7B 06 A9 FD 83 01 91 F3 03";
@@ -205,7 +191,7 @@ const char *get_add_space_pattern(NSOperatingSystemVersion os_version) {
 }
 
 const char *get_remove_space_pattern(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27 || os_version.majorVersion == 26) {
+    if (os_version.majorVersion >= 26) {
         return "7F 23 03 D5 FF ?? ?? D1 FC ?? ?? A9 FA ?? ?? A9 F8 ?? ?? A9 F6 ?? ?? A9 F4 ?? ?? A9 FD ?? ?? A9 FD ?? ?? 91 ?? 03 03 AA F5 03 02 AA F4 03 01 AA";
     } else if (os_version.majorVersion == 15) {
         return "7F 23 03 D5 FF 83 ?? D1 FC 6F ?? A9 FA 67 ?? A9 F8 5F ?? A9 F6 57 ?? A9 F4 4F ?? A9 FD 7B ?? A9 FD 43 ?? 91 ?? 03 03 AA ?? 03 02 AA ?? 03 01 AA ?? 03 00 AA ?? ?? ?? AA";
@@ -221,7 +207,7 @@ const char *get_remove_space_pattern(NSOperatingSystemVersion os_version) {
 }
 
 const char *get_move_space_pattern(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27 || os_version.majorVersion == 26) {
+    if (os_version.majorVersion >= 26) {
         return "7F 23 03 D5 E3 03 1E AA ?? ?? ?? 97 FE 03 03 AA FD 7B ?? A9 FD ?? ?? 91 F6 03 14 AA";
     } else if (os_version.majorVersion == 15) {
         return "7F 23 03 D5 E3 03 1E AA ?? ?? FF 97 FE 03 03 AA FD 7B 06 A9 FD 83 01 91 F6 03 14 AA F4 03 02 AA FB 03 01 AA FA 03 00 AA ?? 13 00 ?? E8 ?? ?? F9 19 68 68 F8 E0 03 19 AA E1 03 16 AA";
@@ -241,7 +227,7 @@ const char *get_move_space_pattern(NSOperatingSystemVersion os_version) {
 }
 
 const char *get_set_front_window_pattern(NSOperatingSystemVersion os_version) {
-    if (os_version.majorVersion == 27 || os_version.majorVersion == 26) {
+    if (os_version.majorVersion >= 26) {
         return "21 ?? ?? 34 7F 23 03 D5 FF ?? 01 D1 F6 ?? 04 A9 F4 ?? 05 A9 FD ?? 06 A9 FD ?? 01 91";
     } else if (os_version.majorVersion == 15) {
         return "7F 23 03 D5 FF ?? 02 D1 F6 57 ?? A9 F4 4F ?? A9 FD 7B ?? A9 FD ?? 02 91 ?? ?? 00 ?? 08 ?? ?? F9";

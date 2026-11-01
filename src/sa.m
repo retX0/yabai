@@ -435,8 +435,18 @@ bool scripting_addition_destroy_space(uint64_t sid)
     return sa_payload_send(SA_OPCODE_SPACE_DESTROY);
 }
 
+static bool scripting_addition_can_move_space(void)
+{
+    uint32_t attrib = 0;
+    char version[SA_SOCKET_BUFF_LEN] = {0};
+    uint32_t need = OSAX_ATTRIB_MOV_SPACE | OSAX_ATTRIB_DPPM;
+    return scripting_addition_request_handshake(version, &attrib) && (attrib & need) == need;
+}
+
 bool scripting_addition_move_space_to_display(uint64_t src_sid, uint64_t dst_sid, uint64_t src_prev_sid, bool focus)
 {
+    if (!scripting_addition_can_move_space()) return false;
+
     sa_payload_init();
     pack(src_sid);
     pack(dst_sid);
@@ -447,6 +457,8 @@ bool scripting_addition_move_space_to_display(uint64_t src_sid, uint64_t dst_sid
 
 bool scripting_addition_move_space_after_space(uint64_t src_sid, uint64_t dst_sid, bool focus)
 {
+    if (!scripting_addition_can_move_space()) return false;
+
     uint64_t dummy_sid = 0;
     sa_payload_init();
     pack(src_sid);

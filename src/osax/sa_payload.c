@@ -54,6 +54,10 @@ static id (*p_objc_retain)(id);
 static SELv (*p_sel_registerName)(const char *);
 static void *(*p_object_getInstanceVariable)(id, const char *, void **);
 static void (*p_object_setInstanceVariable)(id, const char *, void *);
+static Classv *(*p_objc_copyClassList)(unsigned int *);
+static void **(*p_class_copyMethodList)(Classv, unsigned int *);
+static SELv (*p_method_getName)(void *);
+static void *(*p_method_getImplementation)(void *);
 /* CF */
 static CFArrayRef (*p_CFArrayCreate)(CFAllocatorRef, const void **, CFIndex, const void *);
 static CFNumberRef (*p_CFNumberCreate)(CFAllocatorRef, CFNumberType, const void *);
@@ -288,9 +292,70 @@ static uint64_t hex_find_seq_range(uint64_t addr, uint64_t end, const char *c_pa
     return 0;
 }
 
+static uint64_t dock_base(void);
+
+static uint64_t dock_text_end(uint64_t base)
+{
+    if (!base) return 0;
+    uint32_t ncmds = *(uint32_t *)(base + 16);
+    uint8_t *lc = (uint8_t *)(base + 32);
+    for (uint32_t i = 0; i < ncmds; i++) {
+        uint32_t cmd = *(uint32_t *)lc;
+        uint32_t cmdsize = *(uint32_t *)(lc + 4);
+        if (!cmdsize) break;
+        if (cmd == 0x19) { /* LC_SEGMENT_64 */
+            if (lc[8]=='_' && lc[9]=='_' && lc[10]=='T' &&
+                lc[11]=='E' && lc[12]=='X' && lc[13]=='T') {
+                return base + *(uint64_t *)(lc + 32);
+            }
+        }
+        lc += cmdsize;
+    }
+    return base + 0x400000;
+}
+
 static uint64_t hex_find_seq(uint64_t baddr, const char *c_pattern)
 {
-    return hex_find_seq_range(baddr, baddr + 0x1286a0, c_pattern);
+    uint64_t base = dock_base();
+    uint64_t end = dock_text_end(base);
+    if (!baddr) baddr = base;
+    if (!end || baddr >= end) return 0;
+    return hex_find_seq_range(baddr, end, c_pattern);
+}
+
+/* Scan every IMP for selname (class_copyMethodList, no superclass walk)
+ * and return the first match of pat inside the first `window` bytes.
+ * Anchors Tahoe globals to stable ObjC selectors so search offsets are
+ * unnecessary: doBindingCommand:display: → dock_spaces, _handleEvent: → dppm. */
+static uint64_t find_pattern_near_selector(const char *selname, const char *pat, uint64_t window)
+{
+    if (!selname || !pat || !window) return 0;
+    if (!p_objc_copyClassList || !p_class_copyMethodList ||
+        !p_method_getName || !p_method_getImplementation || !p_free)
+        return 0;
+
+    SELv want = p_sel_registerName(selname);
+    unsigned nclass = 0;
+    Classv *cls = p_objc_copyClassList(&nclass);
+    if (!cls) return 0;
+
+    uint64_t found = 0;
+    for (unsigned i = 0; i < nclass && !found; i++) {
+        unsigned nmet = 0;
+        void **methods = p_class_copyMethodList(cls[i], &nmet);
+        if (!methods) continue;
+        for (unsigned j = 0; j < nmet; j++) {
+            if (p_method_getName(methods[j]) != want) continue;
+            uint64_t imp = (uint64_t)__builtin_ptrauth_strip(
+                p_method_getImplementation(methods[j]), 0);
+            if (!imp) continue;
+            found = hex_find_seq_range(imp, imp + window, pat);
+            if (found) break;
+        }
+        p_free(methods);
+    }
+    p_free(cls);
+    return found;
 }
 
 static uint64_t decode_adrp_add(uint64_t addr, uint64_t offset)
@@ -332,8 +397,7 @@ static uint64_t dock_base(void)
 
 static bool verify_os(struct osver v)
 {
-    if (v.major == 27) { S.sequoia = true; S.tahoe = true; return true; }
-    if (v.major == 26) { S.sequoia = true; S.tahoe = true; return true; }
+    if (v.major >= 26) { S.sequoia = true; S.tahoe = true; return true; }
     if (v.major == 15) { S.sequoia = true; return true; }
     if (v.major == 14) return true;
     if (v.major == 13) return true;
@@ -349,8 +413,7 @@ struct vpat {
 
 static struct vpat pat_dock_spaces(struct osver v)
 {
-    if (v.major == 27)  return (struct vpat){0x30000,  "?8 ?? ?? ?? 08 ?? ?? 91 00 01 40 F9 E2 03 13 AA ?? ?? ?? 94 ?? ?? ?? ?? 08"};
-    if (v.major == 26)  return (struct vpat){0x30000,  "?8 ?? ?? ?? 08 ?? ?? 91 00 01 40 F9 E2 03 13 AA ?? ?? ?? 94 ?? ?? ?? ?? 08"};
+    if (v.major >= 26)  return (struct vpat){0,        "?8 ?? ?? ?? 08 ?? ?? 91 00 01 40 F9 E2 03 13 AA ?? ?? ?? 94 ?? ?? ?? ?? 08"};
     if (v.major == 15)  return (struct vpat){v.minor >= 4 ? 0x1f0000 : 0x200000, "BF 6B 0A A9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){0x114000, "BF 6B 0A A9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 13)  return (struct vpat){0x118000, "F4 57 0B A9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
@@ -360,8 +423,7 @@ static struct vpat pat_dock_spaces(struct osver v)
 
 static struct vpat pat_dppm(struct osver v)
 {
-    if (v.major == 27)  return (struct vpat){0x50000,  "?? ?? 00 ?? 08 ?? ?? 91 00 01 40 F9 E2 03 16 AA E3 03 19 AA ?? ?? ?? 94"};
-    if (v.major == 26)  return (struct vpat){0x70000,  "?? ?? 00 ?? 08 ?? ?? 91 00 01 40 F9 E2 03 16 AA E3 03 19 AA ?? ?? ?? 94"};
+    if (v.major >= 26)  return (struct vpat){0,        "?? ?? 00 ?? 08 ?? ?? 91 00 01 40 F9 E2 03 16 AA E3 03 19 AA ?? ?? ?? 94"};
     if (v.major == 15)  return (struct vpat){0x250000, "B1 8C 0E 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){v.minor > 0 ? 0x1d2000 : 0x9000, "B1 8C 0E 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 13)  return (struct vpat){0x9000,   "B1 8C 0E 94 ?? ?? ?? 94 ?? ?? ?? 94"};
@@ -371,8 +433,7 @@ static struct vpat pat_dppm(struct osver v)
 
 static struct vpat pat_add_space(struct osver v)
 {
-    if (v.major == 27)  return (struct vpat){0x220000, "7F 23 03 D5 E1 03 1E AA ?? ?? ?? 97 FE 03 01 AA FD 7B 05 A9 FD 43 01 91 F3 03"};
-    if (v.major == 26)  return (struct vpat){0x250000, "7F 23 03 D5 E1 03 1E AA ?? ?? ?? 97 FE 03 01 AA FD 7B 05 A9 FD 43 01 91 F3 03"};
+    if (v.major >= 26)  return (struct vpat){0,        "7F 23 03 D5 E1 03 1E AA ?? ?? ?? 97 FE 03 01 AA FD 7B 05 A9 FD 43 01 91 F3 03"};
     if (v.major == 15)  return (struct vpat){0x250000, "C8 6C 0A 94 ?? ?? ?? 94 C9 8C 0A 94"};
     if (v.major == 14)  return (struct vpat){0x1D0000, "C8 6C 0A 94 ?? ?? ?? 94 C9 8C 0A 94"};
     if (v.major == 13)  return (struct vpat){0x1E0000, "C8 6C 0A 94 ?? ?? ?? 94 C9 8C 0A 94"};
@@ -382,8 +443,7 @@ static struct vpat pat_add_space(struct osver v)
 
 static struct vpat pat_remove_space(struct osver v)
 {
-    if (v.major == 27)  return (struct vpat){0x180000, "7F 23 03 D5 FF ?? ?? D1 FC ?? ?? A9 FA ?? ?? A9 F8 ?? ?? A9 F6 ?? ?? A9 F4 ?? ?? A9 FD ?? ?? A9 FD ?? ?? 91 ?? 03 03 AA F5 03 02 AA F4 03 01 AA"};
-    if (v.major == 26)  return (struct vpat){0x1e0000, "7F 23 03 D5 FF ?? ?? D1 FC ?? ?? A9 FA ?? ?? A9 F8 ?? ?? A9 F6 ?? ?? A9 F4 ?? ?? A9 FD ?? ?? A9 FD ?? ?? 91 ?? 03 03 AA F5 03 02 AA F4 03 01 AA"};
+    if (v.major >= 26)  return (struct vpat){0,        "7F 23 03 D5 FF ?? ?? D1 FC ?? ?? A9 FA ?? ?? A9 F8 ?? ?? A9 F6 ?? ?? A9 F4 ?? ?? A9 FD ?? ?? A9 FD ?? ?? 91 ?? 03 03 AA F5 03 02 AA F4 03 01 AA"};
     if (v.major == 15)  return (struct vpat){0x1c0000, "CA 8C 0A 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){0x280000, "CA 8C 0A 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 13)  return (struct vpat){0x2A0000, "CA 8C 0A 94 ?? ?? ?? 94 ?? ?? ?? 94"};
@@ -393,8 +453,7 @@ static struct vpat pat_remove_space(struct osver v)
 
 static struct vpat pat_move_space(struct osver v)
 {
-    if (v.major == 27)  return (struct vpat){0x180000, "7F 23 03 D5 E3 03 1E AA ?? ?? ?? 97 FE 03 03 AA FD 7B ?? A9 FD ?? ?? 91 F6 03 14 AA"};
-    if (v.major == 26)  return (struct vpat){0x1c0000, "7F 23 03 D5 E3 03 1E AA ?? ?? ?? 97 FE 03 03 AA FD 7B ?? A9 FD ?? ?? 91 F6 03 14 AA"};
+    if (v.major >= 26)  return (struct vpat){0,        "7F 23 03 D5 E3 03 1E AA ?? ?? ?? 97 FE 03 03 AA FD 7B ?? A9 FD ?? ?? 91 F6 03 14 AA"};
     if (v.major == 15)  return (struct vpat){0x210000, "C7 6C 0A 94 C8 6C 0A 94"};
     if (v.major == 14)  return (struct vpat){0x1C0000, "C7 6C 0A 94 C8 6C 0A 94"};
     if (v.major == 13)  return (struct vpat){0x1F0000, "C7 6C 0A 94 C8 6C 0A 94"};
@@ -404,10 +463,9 @@ static struct vpat pat_move_space(struct osver v)
 
 static struct vpat pat_set_front_window(struct osver v)
 {
-    /* macOS 26/27 use WindowManagerLayoutControl instead; this old signature
+    /* macOS 26+ uses WindowManagerLayoutControl instead; this old signature
      * resolves to a ShowFront transition helper and cannot focus by itself. */
-    if (v.major == 27)  return (struct vpat){0, NULL};
-    if (v.major == 26)  return (struct vpat){0, NULL};
+    if (v.major >= 26)  return (struct vpat){0, NULL};
     if (v.major == 15)  return (struct vpat){0x200000, "1F 29 00 F9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){0x1E0000, "1F 29 00 F9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
     if (v.major == 13)  return (struct vpat){0x200000, "1F 29 00 F9 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94 ?? ?? ?? 94"};
@@ -417,8 +475,7 @@ static struct vpat pat_set_front_window(struct osver v)
 
 static struct vpat pat_fix_animation(struct osver v)
 {
-    if (v.major == 27)  return (struct vpat){0x220000, "00 10 6A 1E A8 ?? ?? D1 ?? 01 ?? F8"};
-    if (v.major == 26)  return (struct vpat){0x250000, "00 10 6A 1E A8 ?? ?? D1 ?? 01 ?? F8"};
+    if (v.major >= 26)  return (struct vpat){0,        "00 10 6A 1E A8 ?? ?? D1 ?? 01 ?? F8"};
     if (v.major == 15)  return (struct vpat){0x250000, "E4 71 0A 94 E2 03 1F AA ?? ?? ?? 94"};
     if (v.major == 14)  return (struct vpat){0x1D0000, "E4 71 0A 94 E2 03 1F AA ?? ?? ?? 94"};
     if (v.major == 13)  return (struct vpat){0x1E0000, "E4 71 0A 94 E2 03 1F AA ?? ?? ?? 94"};
@@ -438,7 +495,11 @@ static void init_instances(void)
 
     p = pat_dock_spaces(v);
     if (p.pat) {
-        uint64_t a = hex_find_seq(baseaddr + p.off, p.pat);
+        uint64_t a = 0;
+        if (v.major >= 26)
+            a = find_pattern_near_selector("doBindingCommand:display:", p.pat, 0x200);
+        if (!a)
+            a = hex_find_seq(baseaddr + p.off, p.pat);
         if (a) {
             uint64_t off = decode_adrp_add(a, a - baseaddr);
             id obj = *(id *)(baseaddr + off);
@@ -448,7 +509,11 @@ static void init_instances(void)
 
     p = pat_dppm(v);
     if (p.pat) {
-        uint64_t a = hex_find_seq(baseaddr + p.off, p.pat);
+        uint64_t a = 0;
+        if (v.major >= 26)
+            a = find_pattern_near_selector("_handleEvent:", p.pat, 0x200);
+        if (!a)
+            a = hex_find_seq(baseaddr + p.off, p.pat);
         if (a) {
             uint64_t off = decode_adrp_add(a, a - baseaddr);
             id obj = *(id *)(baseaddr + off);
@@ -488,7 +553,7 @@ static void init_instances(void)
             uint64_t page = a & ~0x3fffull;
             if (p_vm_protect(*p_mach_task_self_, page, 0x4000, 0,
                              VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY) == KERN_SUCCESS) {
-                *(uint32_t *)a = 0x2f00e400; /* movi d0, #0: zero animation duration */
+                *(uint32_t *)a = 0x2f00e400; /* movi d0, #0: zero space-switch duration */
                 if (p_vm_protect(*p_mach_task_self_, page, 0x4000, 0,
                                  VM_PROT_READ | VM_PROT_EXECUTE) == KERN_SUCCESS) {
                     S.animation_time_addr = a;
@@ -517,6 +582,28 @@ static void set_ivar_value(id instance, const char *name, id value)
 static uint64_t get_space_id(id space)
 {
     return ((uint64_t (*)(id, SELv))objc_msgSend)(space, sel("spid"));
+}
+
+static bool responds_to(id obj, SELv s)
+{
+    return obj && ((bool (*)(id, SELv, SELv))objc_msgSend)(obj, sel("respondsToSelector:"), s);
+}
+
+/* Dock 27.2 replaced currentSpaceForDisplayUUID: with currentSpaceForDisplay:,
+ * which takes a CGDirectDisplayID; resolve it through displayForSPID:. */
+static id current_space_for_display(CFStringRef display_uuid, uint64_t space_id)
+{
+    SELv by_uuid = sel(S.sequoia ? "currentSpaceForDisplayUUID:" : "currentSpaceforDisplayUUID:");
+    if (responds_to(S.dock_spaces, by_uuid))
+        return ((id (*)(id, SELv, CFStringRef))objc_msgSend)(S.dock_spaces, by_uuid, display_uuid);
+
+    SELv by_id = sel("currentSpaceForDisplay:");
+    SELv spid_display = sel("displayForSPID:");
+    if (!responds_to(S.dock_spaces, by_id) || !responds_to(S.dock_spaces, spid_display)) return NULL;
+
+    uint32_t did = ((uint32_t (*)(id, SELv, uint64_t))objc_msgSend)(S.dock_spaces, spid_display, space_id);
+    if (!did) return NULL;
+    return ((id (*)(id, SELv, uint32_t))objc_msgSend)(S.dock_spaces, by_id, did);
 }
 
 static id space_for_display_with_id(CFStringRef display_uuid, uint64_t space_id)
@@ -703,8 +790,11 @@ static void on_main_space_move(void *arg)
 static void on_main_dppm_move(void *arg)
 {
     struct main_ctx *c = arg;
+    /* Removed in Dock 27.2; skip instead of raising an unrecognized selector. */
+    SELv s = sel("moveSpace:toDisplay:displayUUID:");
+    if (!responds_to(S.dppm, s)) return;
     ((void (*)(id, SELv, id, unsigned, CFStringRef))objc_msgSend)(
-        S.dppm, sel("moveSpace:toDisplay:displayUUID:"), c->space, c->dest_display_id, c->dest_display_uuid);
+        S.dppm, s, c->space, c->dest_display_id, c->dest_display_uuid);
 }
 
 static void on_main_window_focus(void *arg)
@@ -749,8 +839,7 @@ static void do_space_focus(char *message)
     CFStringRef dest_display = SLSCopyManagedDisplayForSpace(SLSMainConnectionID(), dest_space_id);
     if (!dest_display) return;
 
-    id source_space = ((id (*)(id, SELv, CFStringRef))objc_msgSend)(
-        S.dock_spaces, sel(S.sequoia ? "currentSpaceForDisplayUUID:" : "currentSpaceforDisplayUUID:"), dest_display);
+    id source_space = current_space_for_display(dest_display, dest_space_id);
     uint64_t source_space_id = source_space ? get_space_id(source_space) : 0;
 
     if (source_space_id != dest_space_id) {
@@ -1313,6 +1402,10 @@ static bool resolve_all(dlsym_fn d)
     RS(p_sel_registerName,  "sel_registerName");
     RS(p_object_getInstanceVariable, "object_getInstanceVariable");
     RS(p_object_setInstanceVariable, "object_setInstanceVariable");
+    RS(p_objc_copyClassList,         "objc_copyClassList");
+    RS(p_class_copyMethodList,       "class_copyMethodList");
+    RS(p_method_getName,             "method_getName");
+    RS(p_method_getImplementation,   "method_getImplementation");
     RS(p_CFArrayCreate,     "CFArrayCreate");
     RS(p_CFNumberCreate,    "CFNumberCreate");
     RS(p_CFRelease,         "CFRelease");
