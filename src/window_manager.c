@@ -2205,7 +2205,15 @@ void window_manager_make_window_floating(struct space_manager *sm, struct window
 
         if (!window_check_flag(window, WINDOW_STICKY)) {
             if ((window_manager_should_manage_window(window)) && (!window_manager_find_managed_window(wm, window))) {
-                struct view *view = space_manager_tile_window_on_space(sm, window, space_manager_active_space());
+                //
+                // NOTE: Tile the window on the space it is on. A window on a hidden space (or on
+                // another display) would otherwise be pulled onto the active space and flash there.
+                //
+
+                uint64_t sid = window_space(window->id);
+                if (!sid) sid = space_manager_active_space();
+
+                struct view *view = space_manager_tile_window_on_space(sm, window, sid);
                 window_manager_add_managed_window(wm, window, view);
             }
         }
