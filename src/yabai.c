@@ -24,6 +24,12 @@
 #define MINOR  1
 #define PATCH 25
 
+// Fork build marker: keeps this build distinct from upstream releases.
+// Bump the number for fork-only changes; reset to 1 on a new upstream version.
+#ifndef VERSION_SUFFIX
+#define VERSION_SUFFIX "-retx0.1"
+#endif
+
 struct signal *g_signal_event[SIGNAL_TYPE_COUNT];
 struct process_manager g_process_manager;
 struct display_manager g_display_manager;
@@ -203,7 +209,7 @@ static void parse_arguments(int argc, char **argv)
 
     if ((string_equals(argv[1], VERSION_OPT_LONG)) ||
         (string_equals(argv[1], VERSION_OPT_SHRT))) {
-        fprintf(stdout, "yabai-v%d.%d.%d\n", MAJOR, MINOR, PATCH);
+        fprintf(stdout, "yabai-v%d.%d.%d%s\n", MAJOR, MINOR, PATCH, VERSION_SUFFIX);
         exit(EXIT_SUCCESS);
     }
 
