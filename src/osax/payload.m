@@ -184,7 +184,7 @@ loop:
     for (int counter = 0; counter < pattern_length; ++counter) {
         if ((buffer_b[counter] == 0) && (((char *)addr)[counter] != buffer_a[counter])) {
             addr = (uint64_t)((char *)addr + 1);
-            if (addr - baddr < 0x1286a0) {
+            if (addr - baddr < 0x400000) {
                 goto loop;
             } else {
                 return 0;
@@ -233,11 +233,9 @@ static bool verify_os_version(NSOperatingSystemVersion os_version)
     } else if (os_version.majorVersion == 15) {
         macOSSequoia = true;
         return true; // Sequoia 15.0
-    } else if (os_version.majorVersion == 26) {
-
-        NSLog(@"[yabai-sa] Detected Tahoe Preview... flagging 'macOSSequoia=true.'");
+    } else if (os_version.majorVersion >= 26) {
         macOSSequoia = true;
-        return true; // Tahoe preview
+        return true;
     }
 
     NSLog(@"[yabai-sa] spaces functionality is only supported on macOS Big Sur 11.0.0+, Monterey 12.0.0+, Ventura 13.0.0+, Sonoma 14.0.0+, and Sequoia 15.0");
@@ -251,11 +249,9 @@ static bool verify_os_version(NSOperatingSystemVersion os_version)
     } else if (os_version.majorVersion == 15) {
         macOSSequoia = true;
         return true; // Sequoia 15.0
-    } else if (os_version.majorVersion == 26) {
-
-        NSLog(@"[yabai-sa] Detected Tahoe Preview... flagging 'macOSSequoia=true.'");
+    } else if (os_version.majorVersion >= 26) {
         macOSSequoia = true;
-        return true; // Tahoe preview
+        return true;
     }
 
     NSLog(@"[yabai-sa] spaces functionality is only supported on macOS Monterey 12.0.0+, and Ventura 13.0.0+, Sonoma 14.0.0+, and Sequoia 15.0");
@@ -492,9 +488,12 @@ static void do_space_move(char *message)
 
     asm__call_move_space(source_space, dest_space, dest_display_uuid, dock_spaces, move_space_fp);
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        ((void (*)(id, SEL, id, unsigned, CFStringRef)) objc_msgSend)(dp_desktop_picture_manager, @selector(moveSpace:toDisplay:displayUUID:), source_space, dest_display_id, dest_display_uuid);
-    });
+    // Removed in Dock 27.2; skip instead of raising an unrecognized selector.
+    if ([dp_desktop_picture_manager respondsToSelector:@selector(moveSpace:toDisplay:displayUUID:)]) {
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            ((void (*)(id, SEL, id, unsigned, CFStringRef)) objc_msgSend)(dp_desktop_picture_manager, @selector(moveSpace:toDisplay:displayUUID:), source_space, dest_display_id, dest_display_uuid);
+        });
+    }
 
     if (focus_dest_space) {
         uint64_t new_source_space_id = SLSManagedDisplayGetCurrentSpace(SLSMainConnectionID(), source_display_uuid);
@@ -566,9 +565,16 @@ static void do_space_focus(char *message)
 
     if (dest_space_id) {
         CFStringRef dest_display = SLSCopyManagedDisplayForSpace(SLSMainConnectionID(), dest_space_id);
-        id source_space = macOSSequoia
-                        ? ((id (*)(id, SEL, CFStringRef)) objc_msgSend)(dock_spaces, @selector(currentSpaceForDisplayUUID:), dest_display)
-                        : ((id (*)(id, SEL, CFStringRef)) objc_msgSend)(dock_spaces, @selector(currentSpaceforDisplayUUID:), dest_display);
+        SEL by_uuid = macOSSequoia ? @selector(currentSpaceForDisplayUUID:) : @selector(currentSpaceforDisplayUUID:);
+        id source_space = nil;
+        if ([dock_spaces respondsToSelector:by_uuid]) {
+            source_space = ((id (*)(id, SEL, CFStringRef)) objc_msgSend)(dock_spaces, by_uuid, dest_display);
+        } else if ([dock_spaces respondsToSelector:@selector(currentSpaceForDisplay:)] &&
+                   [dock_spaces respondsToSelector:@selector(displayForSPID:)]) {
+            // Dock 27.2 takes a CGDirectDisplayID instead of the display UUID.
+            uint32_t did = ((uint32_t (*)(id, SEL, uint64_t)) objc_msgSend)(dock_spaces, @selector(displayForSPID:), dest_space_id);
+            if (did) source_space = ((id (*)(id, SEL, uint32_t)) objc_msgSend)(dock_spaces, @selector(currentSpaceForDisplay:), did);
+        }
         uint64_t source_space_id = get_space_id(source_space);
 
         if (source_space_id != dest_space_id) {

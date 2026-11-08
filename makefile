@@ -27,9 +27,15 @@ tsan: clean-build $(BINS)
 install: BUILD_FLAGS=-std=c11 -Wall -Wextra -DNDEBUG -O3 -fvisibility=hidden -mmacosx-version-min=11.0 -fno-objc-arc -arch x86_64 -arch arm64 -sectcreate __TEXT __info_plist $(INFO_PLIST)
 install: clean-build $(BINS)
 
-$(OSAX_SRC): $(OSAX_PATH)/loader.m $(OSAX_PATH)/payload.m
+$(OSAX_PATH)/blob_bin.c: $(OSAX_PATH)/sa_payload.c $(OSAX_PATH)/common.h $(OSAX_PATH)/sa_data.h
+	xcrun clang $(OSAX_PATH)/sa_payload.c -arch arm64e -O2 -fno-stack-protector -fno-stack-check -c -o $(OSAX_PATH)/sa_payload.o
+	xcrun ld -arch arm64e -e _blob_entry -o $(OSAX_PATH)/sa_blob_img $(OSAX_PATH)/sa_payload.o -lSystem -syslibroot "$(shell xcrun --show-sdk-path)" -platform_version macos 26.0 26.0
+	xxd -i -n sa_blob_image $(OSAX_PATH)/sa_blob_img $(OSAX_PATH)/blob_bin.c
+	rm -f $(OSAX_PATH)/sa_payload.o $(OSAX_PATH)/sa_blob_img
+
+$(OSAX_SRC): $(OSAX_PATH)/loader.m $(OSAX_PATH)/payload.m $(OSAX_PATH)/rsp.c $(OSAX_PATH)/dock_hijack.c $(OSAX_PATH)/common.h $(OSAX_PATH)/sa_data.h $(OSAX_PATH)/blob_bin.c
 	xcrun clang $(OSAX_PATH)/payload.m -shared -fPIC -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o $(OSAX_PATH)/payload $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon
-	xcrun clang $(OSAX_PATH)/loader.m -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o $(OSAX_PATH)/loader -framework Cocoa
+	xcrun clang $(OSAX_PATH)/loader.m $(OSAX_PATH)/rsp.c $(OSAX_PATH)/dock_hijack.c $(OSAX_PATH)/blob_bin.c -fno-stack-protector -fno-stack-check -fno-builtin -Wl,-dead_strip -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64 -o $(OSAX_PATH)/loader -framework Cocoa
 	xxd -i -a $(OSAX_PATH)/payload $(OSAX_PATH)/payload_bin.c
 	xxd -i -a $(OSAX_PATH)/loader $(OSAX_PATH)/loader_bin.c
 	rm -f $(OSAX_PATH)/payload
@@ -62,6 +68,7 @@ clean-build:
 
 clean: clean-build
 	rm -f $(OSAX_SRC)
+	rm -f $(OSAX_PATH)/blob_bin.c
 
 $(BUILD_PATH)/yabai: $(YABAI_SRC)
 	mkdir -p $(BUILD_PATH)

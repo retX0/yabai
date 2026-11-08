@@ -1,7 +1,6 @@
 #include "sa.h"
 
 extern int csr_get_active_config(uint32_t *config);
-#define CSR_ALLOW_UNRESTRICTED_FS 0x02
 #define CSR_ALLOW_TASK_FOR_PID    0x04
 
 extern char g_sa_socket_file[MAXLEN];
@@ -119,21 +118,24 @@ static bool scripting_addition_write_file(char *buffer, unsigned int size, char 
     return result;
 }
 
-static void scripting_addition_prepare_binaries(void)
+static bool scripting_addition_prepare_binaries(void)
 {
     char cmd[MAXLEN];
 
-    snprintf(cmd, sizeof(cmd), "%s %s", "chmod +x", osax_bin_loader);
-    system(cmd);
+    if (chmod(osax_bin_loader, 0755) != 0) return false;
+    if (chmod(osax_bin_payload, 0755) != 0) return false;
+
+    // Sign nested code before the bundle's main executable so the outer
+    // CodeResources seal contains the final payload.
+    snprintf(cmd, sizeof(cmd), "%s %s %s", "codesign -f -s -", osax_bin_payload, "2>/dev/null");
+    if (system(cmd) != 0) return false;
 
     snprintf(cmd, sizeof(cmd), "%s %s %s", "codesign -f -s -", osax_bin_loader, "2>/dev/null");
-    system(cmd);
+    if (system(cmd) != 0) return false;
 
-    snprintf(cmd, sizeof(cmd), "%s %s", "chmod +x", osax_bin_payload);
-    system(cmd);
-
-    snprintf(cmd, sizeof(cmd), "%s %s %s", "codesign -f -s -", osax_bin_payload, "2>/dev/null");
-    system(cmd);
+    // The loader performs one fixed, argument-free operation. Install it
+    // setuid-root so yabai can re-inject after Dock restarts without sudo.
+    return chmod(osax_bin_loader, 04755) == 0;
 }
 
 static void scripting_addition_restart_dock(void)
@@ -227,7 +229,9 @@ static int scripting_addition_install(void)
         goto cleanup;
     }
 
-    scripting_addition_prepare_binaries();
+    if (!scripting_addition_prepare_binaries()) {
+        goto cleanup;
+    }
     scripting_addition_restart_dock();
     return 0;
 
@@ -303,32 +307,12 @@ static bool scripting_addition_is_sip_friendly(void)
     uint32_t config = 0;
     csr_get_active_config(&config);
 
-    if (!(config & CSR_ALLOW_UNRESTRICTED_FS)) {
-        return false;
-    }
-
     if (!(config & CSR_ALLOW_TASK_FOR_PID)) {
         return false;
     }
 
     return true;
 }
-
-#ifdef __arm64__
-static bool scripting_addition_is_arm64e_enabled(void)
-{
-    char bootargs[2048];
-    size_t len = sizeof(bootargs) - 1;
-
-    if (sysctlbyname("kern.bootargs", bootargs, &len, NULL, 0) == 0) {
-        if (strnstr(bootargs, "-arm64e_preview_abi", len)) {
-            return true;
-        }
-    }
-
-    return false;
-}
-#endif
 
 static bool mach_loader_inject_payload(void)
 {
@@ -350,8 +334,8 @@ static bool mach_loader_inject_payload(void)
 int scripting_addition_uninstall(void)
 {
     if (!scripting_addition_is_sip_friendly()) {
-        warn("yabai: System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!\n");
-        notify("scripting-addition", "System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!");
+        warn("yabai: System Integrity Protection: Debugging Restrictions must be disabled!\n");
+        notify("scripting-addition", "System Integrity Protection: Debugging Restrictions must be disabled!");
         return 1;
     }
 
@@ -379,8 +363,8 @@ int scripting_addition_load(void)
     }
 
     if (!scripting_addition_is_sip_friendly()) {
-        warn("yabai: System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!\n");
-        notify("scripting-addition", "System Integrity Protection: Filesystem Protections and Debugging Restrictions must be disabled!");
+        warn("yabai: System Integrity Protection: Debugging Restrictions must be disabled!\n");
+        notify("scripting-addition", "System Integrity Protection: Debugging Restrictions must be disabled!");
         result = 1;
         goto out;
     }
@@ -389,15 +373,6 @@ int scripting_addition_load(void)
         result = scripting_addition_install();
         goto out;
     }
-
-#ifdef __arm64__
-    if (!scripting_addition_is_arm64e_enabled()) {
-        warn("yabai: missing required nvram boot-arg '-arm64e_preview_abi'!\n");
-        notify("scripting-addition", "missing required nvram boot-arg '-arm64e_preview_abi'!");
-        result = 1;
-        goto out;
-    }
-#endif
 
     if (!mach_loader_inject_payload()) {
         warn("yabai: scripting-addition failed to inject payload into Dock.app!\n");
@@ -460,8 +435,18 @@ bool scripting_addition_destroy_space(uint64_t sid)
     return sa_payload_send(SA_OPCODE_SPACE_DESTROY);
 }
 
+static bool scripting_addition_can_move_space(void)
+{
+    uint32_t attrib = 0;
+    char version[SA_SOCKET_BUFF_LEN] = {0};
+    uint32_t need = OSAX_ATTRIB_MOV_SPACE | OSAX_ATTRIB_DPPM;
+    return scripting_addition_request_handshake(version, &attrib) && (attrib & need) == need;
+}
+
 bool scripting_addition_move_space_to_display(uint64_t src_sid, uint64_t dst_sid, uint64_t src_prev_sid, bool focus)
 {
+    if (!scripting_addition_can_move_space()) return false;
+
     sa_payload_init();
     pack(src_sid);
     pack(dst_sid);
@@ -472,6 +457,8 @@ bool scripting_addition_move_space_to_display(uint64_t src_sid, uint64_t dst_sid
 
 bool scripting_addition_move_space_after_space(uint64_t src_sid, uint64_t dst_sid, bool focus)
 {
+    if (!scripting_addition_can_move_space()) return false;
+
     uint64_t dummy_sid = 0;
     sa_payload_init();
     pack(src_sid);
