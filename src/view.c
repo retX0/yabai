@@ -332,6 +332,24 @@ void window_node_update(struct view *view, struct window_node *node)
     }
 }
 
+//
+// NOTE: Tiled windows are moved to the below sub-layer. When a space is changed
+// to float, its windows stop being tiled and must go back to normal, or they can
+// never be raised above other windows. Only do this for float: a bsp/stack view
+// is re-tiled right away, and flipping every window's layer would make it flash.
+//
+
+static void window_node_reset_layer(struct window_node *node)
+{
+    if (node->left)  window_node_reset_layer(node->left);
+    if (node->right) window_node_reset_layer(node->right);
+
+    for (int i = 0; i < node->window_count; ++i) {
+        struct window *window = window_manager_find_window(&g_window_manager, node->window_list[i]);
+        if (window) window_manager_adjust_layer(window, LAYER_NORMAL);
+    }
+}
+
 static void window_node_destroy(struct window_node *node)
 {
     if (node->left)  window_node_destroy(node->left);
@@ -1017,6 +1035,8 @@ struct view *view_create(uint64_t sid)
 void view_clear(struct view *view)
 {
     if (view->root) {
+        if (view->layout == VIEW_FLOAT) window_node_reset_layer(view->root);
+
         if (view->root->left)  window_node_destroy(view->root->left);
         if (view->root->right) window_node_destroy(view->root->right);
 
