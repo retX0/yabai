@@ -3,6 +3,7 @@ name: build
 # Fork CI for retX0/yabai.
 #   push to `release` / PR / manual run -> build, check, upload a workflow artifact
 #   push a tag like v7.1.25-retx0.1     -> same, then publish a GitHub pre-release
+#   manual run with draft_release=true  -> same, but as a private draft (to test the release job)
 
 on:
   push:
@@ -11,6 +12,11 @@ on:
   pull_request:
     branches: [release]
   workflow_dispatch:
+    inputs:
+      draft_release:
+        description: Create a draft release (only visible to repo writers) to test the release job
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -21,7 +27,7 @@ jobs:
     outputs:
       version: ${{ steps.meta.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Toolchain
         run: |
@@ -86,20 +92,20 @@ jobs:
           (cd dist && shasum -a 256 "$VERSION.tar.gz" > "$VERSION.tar.gz.sha256")
           cat "dist/$VERSION.tar.gz.sha256"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.meta.outputs.version }}
           path: dist/*
           if-no-files-found: error
 
   release:
-    if: github.ref_type == 'tag'
+    if: github.ref_type == 'tag' || (github.event_name == 'workflow_dispatch' && inputs.draft_release)
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.build.outputs.version }}
           path: dist
@@ -107,8 +113,17 @@ jobs:
       - name: Publish pre-release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            TAG="$GITHUB_REF_NAME"
+            mode=(--verify-tag --prerelease)
+          else
+            # Draft: the tag is not created until the draft is published.
+            TAG="${VERSION#yabai-}"
+            mode=(--draft --prerelease --target "$GITHUB_SHA")
+          fi
+
           cat > notes.md <<'EOF'
           Unofficial fork build of yabai with the standalone Apple Silicon scripting-addition loader
           (see asmvik/yabai#2826). Not an upstream release.
@@ -127,7 +142,6 @@ jobs:
           EOF
           gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --prerelease \
+            "${mode[@]}" \
             --title "$TAG" \
             --notes-file notes.md
