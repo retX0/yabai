@@ -300,6 +300,46 @@ static enum handshake_status check_payload(const char *socket_path)
     return HANDSHAKE_VALID;
 }
 
+#define LOADER_LOCK_PATH       "/var/run/yabai-sa-loader.lock"
+// Longer than one worst-case injection, so a loader that is still working
+// finishes first; a stuck one can no longer block every later --load-sa.
+#define LOADER_LOCK_TIMEOUT_MS 30000
+
+static bool acquire_loader_lock(const char *path, int timeout_ms)
+{
+    int lockfd = open(path, O_CREAT | O_CLOEXEC | O_RDWR | O_NOFOLLOW, 0600);
+    if (lockfd == -1) {
+        fprintf(stderr, "could not open loader lock '%s': %s\n", path, strerror(errno));
+        return false;
+    }
+
+    for (int waited_ms = 0;; waited_ms += 100) {
+        if (flock(lockfd, LOCK_EX | LOCK_NB) == 0) return true; // fd stays open: lock held until exit
+
+        if (errno != EWOULDBLOCK && errno != EINTR) {
+            fprintf(stderr, "could not acquire loader lock: %s\n", strerror(errno));
+            break;
+        }
+
+        if (waited_ms >= timeout_ms) {
+            fprintf(stderr, "another loader is still running after %d ms; giving up\n", timeout_ms);
+            break;
+        }
+
+        usleep(100000);
+    }
+
+    close(lockfd);
+    return false;
+}
+
+static void sanitize_environment(void)
+{
+    extern char **environ;
+    static char *safe_environ[] = { "PATH=/usr/bin:/bin:/usr/sbin:/sbin", NULL };
+    environ = safe_environ;
+}
+
 int main(void)
 {
     if (geteuid() != 0) {
@@ -307,15 +347,22 @@ int main(void)
         return 1;
     }
 
-    int lockfd = open("/var/run/yabai-sa-loader.lock", O_CREAT | O_CLOEXEC | O_RDWR, 0600);
-    if (lockfd == -1 || flock(lockfd, LOCK_EX) == -1) {
-        fprintf(stderr, "could not acquire loader lock\n");
+    if (!acquire_loader_lock(LOADER_LOCK_PATH, LOADER_LOCK_TIMEOUT_MS)) {
         return 1;
     }
 
     char socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
     if (!get_sa_socket_path(socket_path, sizeof(socket_path))) {
         fprintf(stderr, "could not resolve scripting-addition socket path\n");
+        return 1;
+    }
+
+    // This binary is setuid-root and the caller controls its environment.
+    // SUDO_UID has been read above; nothing after this point may trust the
+    // environment (popen'd tools, debugserver), so replace it entirely.
+    sanitize_environment();
+    if (chdir("/") != 0) {
+        fprintf(stderr, "could not change directory to /\n");
         return 1;
     }
 

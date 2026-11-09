@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 
 static uint8_t rsp_checksum(const char *data, size_t len)
@@ -80,8 +81,21 @@ int rsp_connect(int port)
             .sin_port = htons((uint16_t)port),
             .sin_addr.s_addr = inet_addr("127.0.0.1"),
         };
-        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0)
+        if (fd == -1) return -1;
+        if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+            // Bound every later read/write: rsp_recv() returns NULL on timeout
+            // instead of blocking forever. Never die from SIGPIPE if
+            // debugserver goes away mid-session.
+            struct timeval timeout = { .tv_sec = RSP_IO_TIMEOUT_SEC };
+            int on = 1;
+            if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == -1 ||
+                setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == -1 ||
+                setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, sizeof(on)) == -1) {
+                close(fd);
+                return -1;
+            }
             return fd;
+        }
         close(fd);
         usleep(100000);
     }
