@@ -27,7 +27,7 @@
 // Fork build marker: keeps this build distinct from upstream releases.
 // Bump the number for fork-only changes; reset to 1 on a new upstream version.
 #ifndef VERSION_SUFFIX
-#define VERSION_SUFFIX "-retx0.1"
+#define VERSION_SUFFIX "-retx0.2"
 #endif
 
 struct signal *g_signal_event[SIGNAL_TYPE_COUNT];
