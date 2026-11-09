@@ -35,7 +35,7 @@ $(OSAX_PATH)/blob_bin.c: $(OSAX_PATH)/sa_payload.c $(OSAX_PATH)/common.h $(OSAX_
 
 $(OSAX_SRC): $(OSAX_PATH)/loader.m $(OSAX_PATH)/payload.m $(OSAX_PATH)/rsp.c $(OSAX_PATH)/dock_hijack.c $(OSAX_PATH)/common.h $(OSAX_PATH)/sa_data.h $(OSAX_PATH)/blob_bin.c
 	xcrun clang $(OSAX_PATH)/payload.m -shared -fPIC -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64e -o $(OSAX_PATH)/payload $(FRAMEWORK_PATH) -framework SkyLight -framework Foundation -framework Carbon
-	xcrun clang $(OSAX_PATH)/loader.m $(OSAX_PATH)/rsp.c $(OSAX_PATH)/dock_hijack.c $(OSAX_PATH)/blob_bin.c -fno-stack-protector -fno-stack-check -fno-builtin -Wl,-dead_strip -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64 -o $(OSAX_PATH)/loader -framework Cocoa
+	xcrun clang $(OSAX_PATH)/loader.m $(OSAX_PATH)/rsp.c $(OSAX_PATH)/dock_hijack.c $(OSAX_PATH)/blob_bin.c -fno-stack-protector -fno-stack-check -fno-builtin -Wl,-dead_strip -O3 -mmacosx-version-min=11.0 -arch x86_64 -arch arm64 -o $(OSAX_PATH)/loader -framework Cocoa -framework Security
 	xxd -i -a $(OSAX_PATH)/payload $(OSAX_PATH)/payload_bin.c
 	xxd -i -a $(OSAX_PATH)/loader $(OSAX_PATH)/loader_bin.c
 	rm -f $(OSAX_PATH)/payload
