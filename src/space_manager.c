@@ -1130,8 +1130,70 @@ void space_manager_mark_spaces_invalid(struct space_manager *sm)
     }
 }
 
+//
+// NOTE(retX0): An application is only put in the refresh list when we fail to resolve its
+// windows at launch (or startup). If we later stop tracking one of its windows while the
+// window itself stays alive (e.g. we were told the AX element was destroyed, but the window
+// is shown again without a new kAXCreatedNotification), nothing would ever look for it again.
+// Such a window is left in the normal sub-layer above our tiled windows, so activating the
+// app that owns the window below it does not bring that window to the front.
+//
+// Find windows on the visible spaces that belong to an application we observe, but that we do
+// not track, and queue their application so that the refresh below resolves them.
+//
+
+static void space_manager_queue_untracked_visible_windows(void)
+{
+    int display_count;
+    uint32_t *display_list = display_manager_active_display_list(&display_count);
+    if (!display_list) return;
+
+    int space_count = 0;
+    uint64_t *space_list = ts_alloc_list(uint64_t, display_count);
+
+    for (int i = 0; i < display_count; ++i) {
+        uint64_t sid = display_space_id(display_list[i]);
+        if (sid && space_is_user(sid)) space_list[space_count++] = sid;
+    }
+
+    if (!space_count) return;
+
+    int window_count = 0;
+    uint32_t *window_list = space_window_list_for_connection(space_list, space_count, 0, &window_count, false);
+    if (!window_list) return;
+
+    for (int i = 0; i < window_count; ++i) {
+        uint32_t wid = window_list[i];
+        if (window_manager_find_window(&g_window_manager, wid)) continue;
+
+        int cid = 0;
+        if (SLSGetWindowOwner(g_connection, wid, &cid) != kCGErrorSuccess) continue;
+
+        pid_t pid = 0;
+        if (SLSConnectionGetPID(cid, &pid) != kCGErrorSuccess || !pid) continue;
+
+        struct application *application = window_manager_find_application(&g_window_manager, pid);
+        if (!application) continue;
+
+        bool queued = false;
+        for (int j = 0; j < buf_len(g_window_manager.applications_to_refresh); ++j) {
+            if (g_window_manager.applications_to_refresh[j] == application) {
+                queued = true;
+                break;
+            }
+        }
+
+        if (!queued) {
+            debug("%s: %s has untracked window %d on a visible space\n", __FUNCTION__, application->name, wid);
+            buf_push(g_window_manager.applications_to_refresh, application);
+        }
+    }
+}
+
 bool space_manager_refresh_application_windows(struct space_manager *sm)
 {
+    space_manager_queue_untracked_visible_windows();
+
     int refresh_count = buf_len(g_window_manager.applications_to_refresh);
     if (!refresh_count) return false;
     int window_count = g_window_manager.window.count;
