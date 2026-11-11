@@ -4,6 +4,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libproc.h>
 #include <pwd.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -15,6 +16,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/un.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "common.h"
@@ -76,15 +78,90 @@ static char shell_code[] =
 "\x00\x00\x00\x00\x00\x00\x00\x00";
 #endif
 
-static pid_t get_dock_pid(void)
-{
-    NSArray *list = [NSRunningApplication runningApplicationsWithBundleIdentifier:@"com.apple.dock"];
+#define DOCK_EXECUTABLE_PATH "/System/Library/CoreServices/Dock.app/Contents/MacOS/Dock"
+#define DOCK_WAIT_TIMEOUT_MS 5000
+#define DOCK_MIN_AGE_SEC     2
 
-    if (list.count == 1) {
-        NSRunningApplication *dock = list[0];
-        if ([dock isFinishedLaunching] == YES) {
-            return [dock processIdentifier];
+//
+// Every logged-in user has a Dock of their own. Return the pid of the one that
+// belongs to `uid`, and how many such processes exist. The process table is
+// used instead of LaunchServices (NSRunningApplication), which only knows the
+// applications of the caller's own login session and so finds nothing when the
+// loader is started from another session (e.g. over ssh).
+//
+
+static pid_t find_dock_pid(uid_t uid, int *match_count, time_t *start_time)
+{
+    *match_count = 0;
+
+    int capacity = proc_listallpids(NULL, 0);
+    if (capacity <= 0) return 0;
+
+    capacity += 64;
+    pid_t *pid_list = malloc(sizeof(pid_t) * capacity);
+    if (!pid_list) return 0;
+
+    pid_t result = 0;
+    int pid_count = proc_listallpids(pid_list, sizeof(pid_t) * capacity);
+
+    for (int i = 0; i < pid_count; ++i) {
+        struct proc_bsdinfo info;
+        if (proc_pidinfo(pid_list[i], PROC_PIDTBSDINFO, 0, &info, sizeof(info)) != sizeof(info)) continue;
+        if (info.pbi_uid != uid) continue;
+
+        char path[PROC_PIDPATHINFO_MAXSIZE];
+        if (proc_pidpath(pid_list[i], path, sizeof(path)) <= 0) continue;
+        if (strcmp(path, DOCK_EXECUTABLE_PATH) != 0) continue;
+
+        if (++(*match_count) == 1) {
+            result = pid_list[i];
+            *start_time = (time_t)info.pbi_start_tvsec;
         }
+    }
+
+    free(pid_list);
+    return result;
+}
+
+static bool dock_is_ready(pid_t pid, time_t start_time)
+{
+    @autoreleasepool {
+        NSRunningApplication *dock = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+        if (dock) return [dock isFinishedLaunching] == YES;
+    }
+
+    // LaunchServices can not see this Dock from our session. Do not inject into
+    // a Dock that has only just been spawned.
+    return time(NULL) - start_time >= DOCK_MIN_AGE_SEC;
+}
+
+//
+// Find the Dock of `uid` and wait a moment if it is (re)starting: yabai
+// restarts the Dock itself after installing the scripting-addition.
+//
+
+static pid_t get_dock_pid(uid_t uid)
+{
+    int match_count = 0;
+    pid_t pid = 0;
+
+    for (int waited_ms = 0;; waited_ms += 100) {
+        time_t start_time = 0;
+        pid = find_dock_pid(uid, &match_count, &start_time);
+
+        if (match_count > 1) break;
+        if (match_count == 1 && dock_is_ready(pid, start_time)) return pid;
+        if (waited_ms >= DOCK_WAIT_TIMEOUT_MS) break;
+
+        usleep(100000);
+    }
+
+    if (match_count == 0) {
+        fprintf(stderr, "could not find a Dock process owned by uid %u\n", uid);
+    } else if (match_count == 1) {
+        fprintf(stderr, "Dock (pid %d) has not finished launching\n", pid);
+    } else {
+        fprintf(stderr, "found %d Dock processes owned by uid %u, expected one\n", match_count, uid);
     }
 
     return 0;
@@ -235,12 +312,17 @@ enum handshake_status {
     HANDSHAKE_INCOMPATIBLE,
 };
 
-static bool get_sa_socket_path(char *path, size_t size)
+//
+// The user whose Dock and scripting-addition socket this run is for.
+//
+// sudo makes the real uid root and preserves the caller in SUDO_UID.
+// Direct execution of this setuid loader keeps the caller as the real uid.
+//
+
+static uid_t get_target_uid(void)
 {
     uid_t uid = getuid();
 
-    // sudo makes the real uid root and preserves the caller in SUDO_UID.
-    // Direct execution of this setuid loader keeps the caller as the real uid.
     if (uid == 0) {
         const char *sudo_uid = getenv("SUDO_UID");
         if (sudo_uid) {
@@ -253,6 +335,11 @@ static bool get_sa_socket_path(char *path, size_t size)
         }
     }
 
+    return uid;
+}
+
+static bool get_sa_socket_path(uid_t uid, char *path, size_t size)
+{
     struct passwd *pw = getpwuid(uid);
     if (!pw || !pw->pw_name) return false;
 
@@ -351,8 +438,10 @@ int main(void)
         return 1;
     }
 
+    uid_t uid = get_target_uid();
+
     char socket_path[sizeof(((struct sockaddr_un *)0)->sun_path)];
-    if (!get_sa_socket_path(socket_path, sizeof(socket_path))) {
+    if (!get_sa_socket_path(uid, socket_path, sizeof(socket_path))) {
         fprintf(stderr, "could not resolve scripting-addition socket path\n");
         return 1;
     }
@@ -374,12 +463,8 @@ int main(void)
     }
 
     mach_port_t task = 0;
-    pid_t pid = get_dock_pid();
-
-    if (!pid) {
-        fprintf(stderr, "could not locate Dock.app pid\n");
-        return 1;
-    }
+    pid_t pid = get_dock_pid(uid);
+    if (!pid) return 1;
 
     if (task_for_pid(mach_task_self(), pid, &task) != KERN_SUCCESS) {
         fprintf(stderr, "could not retrieve task port for pid: %d\n", pid);
